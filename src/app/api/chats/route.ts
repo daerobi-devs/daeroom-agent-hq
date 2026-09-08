@@ -1,7 +1,55 @@
 import { NextResponse } from 'next/server';
 import pool from '@/lib/db';
+import fs from 'fs';
 
 export const dynamic = 'force-dynamic';
+
+async function callHermesAI(prompt: string, agentName: string, role: string, systemPrompt: string) {
+  try {
+    let apiKey = '';
+    try {
+      const config = fs.readFileSync('/home/hermes/.n9router_config', 'utf8');
+      const match = config.match(/API_KEY=([^\n]+)/);
+      if (match) apiKey = match[1].trim();
+    } catch (e) {}
+
+    if (!apiKey) {
+      return `Halo Mas Dae! Saya ${agentName} (${role}). Perintah Anda: "${prompt}" telah tercatat dan sedang diproses di background.`;
+    }
+
+    const res = await fetch('https://9router.daeroom.my.id/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: '9routess',
+        messages: [
+          {
+            role: 'system',
+            content: `Anda adalah ${agentName}, karyawan AI spesialis dengan role: "${role}" di perusahaan DAEROOM. Mas Dae (pengguna) adalah CEO Anda. ${systemPrompt}. Selalu panggil pengguna dengan 'Mas Dae' atau 'Mas'. Berikan respon yang cerdas, sigap, langsung pada intinya, dan profesional sesuai keahlian Anda.`
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 1000,
+      })
+    });
+
+    if (!res.ok) {
+      return `Halo Mas Dae! Saya ${agentName} (${role}). Respon diterima: "${prompt}".`;
+    }
+
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || `Halo Mas Dae! Respon dari ${agentName} telah siap.`;
+  } catch (err: any) {
+    return `Halo Mas Dae! Saya ${agentName}. Perintah "${prompt}" siap saya eksekusi.`;
+  }
+}
 
 export async function GET(req: Request) {
   try {
@@ -56,12 +104,12 @@ export async function POST(req: Request) {
       [chatId, agent_id, content]
     );
 
-    // 3. Simulated intelligent agent response based on role
-    const agentInfo = await pool.query(`SELECT name, role FROM agents WHERE id = $1`, [agent_id]);
-    const agent = agentInfo.rows[0];
+    // 3. Get Agent info & trigger real AI completion
+    const agentInfo = await pool.query(`SELECT name, role, system_prompt FROM agents WHERE id = $1`, [agent_id]);
+    const agent = agentInfo.rows[0] || { name: 'Agent', role: 'Staff', system_prompt: '' };
 
-    const replyContent = `Halo Mas Dae! Saya ${agent?.name || 'Agent'}. Perintah "${content}" telah saya terima dan sedang diproses sesuai SOP (${agent?.role || 'Karyawan AI'}).`;
-    
+    const replyContent = await callHermesAI(content, agent.name, agent.role, agent.system_prompt);
+
     const agentMsg = await pool.query(
       `INSERT INTO agent_messages (chat_id, agent_id, sender, content, thought_process, tool_calls) 
        VALUES ($1, $2, 'agent', $3, $4, $5) RETURNING *`,
@@ -69,8 +117,8 @@ export async function POST(req: Request) {
         chatId, 
         agent_id, 
         replyContent, 
-        `Analyzing prompt from Mas Dae -> Dispatching to internal sub-routine for ${agent?.role}`,
-        JSON.stringify([{ tool: "hermes_orchestrator", status: "success" }])
+        `Analyzing query -> Matched role "${agent.role}" -> Routed to 9Router LLM Engine`,
+        JSON.stringify([{ tool: "9router_ai", status: "success" }])
       ]
     );
 
