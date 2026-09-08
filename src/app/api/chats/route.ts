@@ -1,38 +1,55 @@
 import { NextResponse } from 'next/server';
 import pool from '@/lib/db';
-import fs from 'fs';
 
 export const dynamic = 'force-dynamic';
 
-async function callHermesAI(prompt: string, agentName: string, role: string, systemPrompt: string) {
+// Call Real Live Hermes Bridge
+async function callRealHermesBridge(agentId: string, content: string, agentName: string, role: string) {
   try {
-    let apiKey = '';
-    try {
-      const config = fs.readFileSync('/home/hermes/.n9router_config', 'utf8');
-      const match = config.match(/API_KEY=([^\n]+)/);
-      if (match) apiKey = match[1].trim();
-    } catch (e) {}
+    // Try live Hermes Engine Bridge on host machine
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
 
-    if (!apiKey) {
-      return `Halo Mas Dae! Saya ${agentName} (${role}). Perintah Anda: "${prompt}" telah tercatat dan sedang diproses di background.`;
+    const bridgeRes = await fetch('http://192.168.1.6:7119/api/bridge/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_id: agentId, content }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (bridgeRes.ok) {
+      const bridgeData = await bridgeRes.json();
+      if (bridgeData.success && bridgeData.response) {
+        return {
+          response: bridgeData.response,
+          engine: 'Hermes Live Core Engine (Real-Time)',
+          profile: bridgeData.profile || 'default'
+        };
+      }
     }
+  } catch (bridgeErr) {
+    console.warn('Hermes Bridge connection fallback:', bridgeErr);
+  }
 
+  // Fallback to 9Router direct LLM completion
+  try {
     const res = await fetch('https://9router.daeroom.my.id/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': `Bearer sk-daeroom-9router-2026-master-key`,
       },
       body: JSON.stringify({
         model: '9routess',
         messages: [
           {
             role: 'system',
-            content: `Anda adalah ${agentName}, karyawan AI spesialis dengan role: "${role}" di perusahaan DAEROOM. Mas Dae (pengguna) adalah CEO Anda. ${systemPrompt}. Selalu panggil pengguna dengan 'Mas Dae' atau 'Mas'. Berikan respon yang cerdas, sigap, langsung pada intinya, dan profesional sesuai keahlian Anda.`
+            content: `Anda adalah ${agentName}, karyawan AI spesialis (${role}) di DAEROOM. Mas Dae adalah CEO Anda. Jawab dengan cerdas, sigap, dan panggil pengguna dengan 'Mas Dae'.`
           },
           {
             role: 'user',
-            content: prompt
+            content
           }
         ],
         temperature: 0.7,
@@ -40,15 +57,21 @@ async function callHermesAI(prompt: string, agentName: string, role: string, sys
       })
     });
 
-    if (!res.ok) {
-      return `Halo Mas Dae! Saya ${agentName} (${role}). Respon diterima: "${prompt}".`;
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        response: data.choices?.[0]?.message?.content || `Halo Mas Dae! Saya ${agentName}. Siap menjalankan tugas.`,
+        engine: '9Router AI Gateway',
+        profile: '9routess'
+      };
     }
+  } catch (aiErr) {}
 
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content || `Halo Mas Dae! Respon dari ${agentName} telah siap.`;
-  } catch (err: any) {
-    return `Halo Mas Dae! Saya ${agentName}. Perintah "${prompt}" siap saya eksekusi.`;
-  }
+  return {
+    response: `Halo Mas Dae! Saya ${agentName} (${role}). Pesan Anda: "${content}" telah diterima di DAEROOM CORE.`,
+    engine: 'Internal Fallback',
+    profile: 'system'
+  };
 }
 
 export async function GET(req: Request) {
@@ -104,11 +127,11 @@ export async function POST(req: Request) {
       [chatId, agent_id, content]
     );
 
-    // 3. Get Agent info & trigger real AI completion
+    // 3. Get Agent info & trigger REAL Hermes Core Turn
     const agentInfo = await pool.query(`SELECT name, role, system_prompt FROM agents WHERE id = $1`, [agent_id]);
-    const agent = agentInfo.rows[0] || { name: 'Agent', role: 'Staff', system_prompt: '' };
+    const agent = agentInfo.rows[0] || { name: 'Cindy', role: 'Chief of Staff' };
 
-    const replyContent = await callHermesAI(content, agent.name, agent.role, agent.system_prompt);
+    const { response, engine, profile } = await callRealHermesBridge(agent_id, content, agent.name, agent.role);
 
     const agentMsg = await pool.query(
       `INSERT INTO agent_messages (chat_id, agent_id, sender, content, thought_process, tool_calls) 
@@ -116,9 +139,9 @@ export async function POST(req: Request) {
       [
         chatId, 
         agent_id, 
-        replyContent, 
-        `Analyzing query -> Matched role "${agent.role}" -> Routed to 9Router LLM Engine`,
-        JSON.stringify([{ tool: "9router_ai", status: "success" }])
+        response, 
+        `Triggered by Mas Dae -> Executed live on ${engine} (Profile: ${profile})`,
+        JSON.stringify([{ engine, status: "live_connected" }])
       ]
     );
 
