@@ -10,7 +10,8 @@ async function callRealHermesBridge(agentId: string, content: string, agentName:
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000);
 
-    const bridgeRes = await fetch('http://192.168.1.6:7119/api/bridge/chat', {
+    const bridgeUrl = process.env.HERMES_BRIDGE_URL || 'http://100.91.75.104:7119';
+    const bridgeRes = await fetch(`${bridgeUrl}/api/bridge/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent_id: agentId, content }),
